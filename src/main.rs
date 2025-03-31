@@ -1,7 +1,23 @@
+#[derive(Debug)]
+#[allow(non_camel_case_types)]
+pub enum AddressingMode {
+    Immediate,
+    ZeroPage,
+    ZeroPage_X,
+    ZeroPage_Y,
+    Absolute,
+    Absolute_X,
+    Absolute_Y,
+    Indirect_X,
+    Indirect_Y,
+    NoneAddressing,
+}
+
 // Define CPU and its registers
 pub struct CPU {
     pub register_a: u8,
     pub register_x: u8,
+    pub register_y: u8,
     pub status: u8,
     pub program_counter: u16,
     memory: [u8; 0xFFFF]
@@ -12,6 +28,7 @@ impl CPU {
         CPU {
             register_a: 0,
             register_x: 0,
+            register_y: 0,
             status: 0,
             program_counter: 0,
             memory: [0; 0xFFFF]
@@ -22,23 +39,54 @@ impl CPU {
         self.memory[addr as usize]
     } 
 
+    pub fn mem_read_u16(&self, pos: u16) -> u16 {
+        // read byte at lower address
+        let lo = self.mem_read(pos) as u16;
+        // read by at higher address
+        let hi = self.mem_read(pos + 1) as u16;
+        // combines the hi and lo byte with little endian ordering.
+        // shifts the hi byte 8 bits to the left of the lo byte, uses the OR operator to combine
+        (hi << 8) | (lo as u16)
+    }
+
     pub fn mem_write(&mut self, addr: u16, data: u8) {
         self.memory[addr as usize] = data;
     }
 
+    pub fn mem_write_u16(&mut self, addr: u16, data: u16) {
+        // From data, shift the most significant 8 bits into the position of the least significant
+        // then truncate, preserving least significant bits
+        let hi = (data >> 8) as u8;
+        // preserve only the least significant bits by comparing data (16bits) to 8 set bits and
+        // then truncate, preserving least significant bits again
+        let lo = (data & 0xFF) as u8;
+
+        self.mem_write(addr, lo);
+        self.mem_write(addr + 1, hi);
+        
+    }
+
     pub fn load_and_run(&mut self, program: Vec<u8>) {
         self.load(program);
+        self.reset();
         self.run()
+    }
+
+    pub fn reset(&mut self) {
+        self.register_a = 0;
+        self.register_x = 0;
+        self.status = 0;
+
+        // Reset program to special program start point defined by program ROMs
+        self.program_counter = self.mem_read_u16(0xFFFC);
     }
 
     pub fn load(&mut self, program: Vec<u8>) {
         self.memory[0x8000 .. (0x8000 + program.len())].copy_from_slice(&program[..]);
-        self.program_counter = 0x8000;
+        self.mem_write_u16(0xFFFC, 0x8000);
     }
 
     pub fn run(&mut self) {
-        self.program_counter = 0;
-
         loop {
             let opscode = self.mem_read(self.program_counter);
             self.program_counter += 1;
@@ -91,6 +139,68 @@ impl CPU {
             self.status = self.status | 0b1000_0000;
         } else {
             self.status = self.status & 0b0111_1111;
+        }
+    }
+
+    pub fn get_operand_address(&self, mode: &AddressingMode) -> u16 {
+        match mode {
+            // Immediate -> For returning the current memory address
+            AddressingMode::Immediate => self.program_counter,
+
+            // Zero Page -> For accessing memory within the first 256 bits of address space, uses 1 byte addressing
+            AddressingMode::ZeroPage => self.mem_read(self.program_counter) as u16,
+
+            // Absolute -> For accessing memory in the whole address space, uses 2 byte addressing
+            AddressingMode::Absolute => self.mem_read_u16(self.program_counter),
+
+            // Zero Page + X -> Uses zero page but offets with value in X register
+            AddressingMode::ZeroPage_X => {
+                let pos = self.mem_read(self.program_counter);
+                let addr = pos.wrapping_add(self.register_x) as u16;
+                addr
+            },
+
+            // Zero Page + Y -> Uses zero page (single byte addressing) with Y register offset
+            AddressingMode::ZeroPage_Y => {
+                let pos = self.mem_read(self.program_counter);
+                let addr = pos.wrapping_add(self.register_y) as u16;
+                addr
+            },
+
+            // Absolute + X -> Uses 2 double byte addressing (whole address space access) with X register offset
+            AddressingMode::Absolute_X => {
+                let pos = self.mem_read_u16(self.program_counter);
+                let addr = pos.wrapping_add(self.register_x as u16);
+                addr
+            },
+
+            // Absolute + Y -> Uses 2 byte addressing with Y register offset
+            AddressingMode::Absolute_Y => {
+                let pos = self.mem_read_u16(self.program_counter);
+                let addr = pos.wrapping_add(self.register_y as u16);
+                addr
+            },
+
+            // Indirect X -> Uses zero page, X addressing and returns the two bytes found. Those two bytes are used as
+            // a reference to another address in memory
+            AddressingMode::Indirect_X => {
+                let base = self.mem_read(self.program_counter);
+
+                let ptr: u8 = (base as u8).wrapping_add(self.register_x);
+                let lo = self.mem_read(ptr as u16);
+                let hi = self.mem_read(ptr.wrapping_add(1) as u16);
+                (hi as u16) << 8 | (lo as u16)
+            },
+
+            AddressingMode::Indirect_Y => {
+                let base = self.mem_read(self.program_counter);
+
+                let ptr: u8 = (base as u8).wrapping_add(self.register_y);
+                let lo = self.mem_read(ptr as u16);
+                let hi = self.mem_read(ptr.wrapping_add(1) as u16);
+                (hi as u16) << 8 | (lo as u16)
+            }
+            _ => panic!("OH NO!")
         }
     }
 }
@@ -151,16 +261,14 @@ mod test {
     #[test]
     fn test_0xe8_inx_immediate_increment() {
         let mut cpu = CPU::new();
-        cpu.register_a = 5;
-        cpu.load_and_run(vec![0xAA, 0xE8, 0x00]);
+        cpu.load_and_run(vec![0xA9, 0x05, 0xAA, 0xE8, 0x00]);
         assert_eq!(cpu.register_x, 6);
     }
 
     #[test]
     fn test_inx_overflow() {
         let mut cpu = CPU::new();
-        cpu.register_x = 0xff;
-        cpu.load_and_run(vec![0xe8, 0xe8, 0x00]);
+        cpu.load_and_run(vec![0xA9, 0xFF, 0xAA, 0xE8, 0xE8, 0x00]);
 
         assert_eq!(cpu.register_x, 1)
     }
