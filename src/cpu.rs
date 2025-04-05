@@ -1,5 +1,18 @@
 use crate::opcodes;
 
+bitflags! {
+    pub struct StatusFlags: u8 {
+        const CARRY             = 0b00000001;
+        const ZERO              = 0b00000010;
+        const INTERRUPT_DISABLE = 0b00000100;
+        const DECIMAL_MODE      = 0b00001000;
+        const BREAK             = 0b00010000;
+        const BREAK2            = 0b00100000;
+        const OVERFLOW          = 0b01000000;
+        const NEGATIVE          = 0b10000000;
+    }
+}
+
 #[derive(Debug)]
 #[allow(non_camel_case_types)]
 pub enum AddressingMode {
@@ -28,7 +41,7 @@ pub struct CPU {
     pub register_a: u8,
     pub register_x: u8,
     pub register_y: u8,
-    pub status: u8,
+    pub status: StatusFlags,
     pub program_counter: u16,
     memory: [u8; 0xFFFF]
 }
@@ -39,7 +52,7 @@ impl CPU {
             register_a: 0,
             register_x: 0,
             register_y: 0,
-            status: 0,
+            status: StatusFlags::from_bits_truncate(0b100100),
             program_counter: 0,
             memory: [0; 0xFFFF]
         }
@@ -85,7 +98,7 @@ impl CPU {
     pub fn reset(&mut self) {
         self.register_a = 0;
         self.register_x = 0;
-        self.status = 0;
+        self.status = StatusFlags::from_bits_retain(0b100100);
 
         // Reset program to special program start point defined by program ROMs
         self.program_counter = self.mem_read_u16(0xFFFC);
@@ -115,6 +128,10 @@ impl CPU {
                 0x85 | 0x95 | 0x8d | 0x9d | 0x99 | 0x81 | 0x91 => {
                     self.sta(&opcode.mode);
                 }
+
+                0x69 | 0x65 | 0x75 | 0x6d | 0x7d | 0x79 | 0x61 | 0x71 => {
+                    self.adc(&opcode.mode);
+                } 
                 
                 0xAA => self.tax(),
                 0xe8 => self.inx(),
@@ -152,18 +169,43 @@ impl CPU {
         let addr = self.get_operand_address(mode);
         self.mem_write(addr, self.register_a);
     }
+
+    fn adc(&mut self, mode: &AddressingMode) {
+        let addr = self.get_operand_address(mode);
+        let value = self.mem_read(addr) as u16;
+        // Add the carry flag 
+        let result = self.register_a as u16 + value;
+
+        if result > 0xFF {
+            self.set_carry_flag();
+        } else {
+            self.unset_carry_flag();
+        }
+
+        self.register_a = result as u8;
+
+        self.update_zero_and_negative_flags();
+    }
+
+    pub fn set_carry_flag(&mut self) {
+        self.status.insert(StatusFlags::CARRY);
+    }
+
+    pub fn unset_carry_flag(&mut self) {
+        self.status.remove(StatusFlags::CARRY);
+    }
     
     pub fn update_zero_and_negative_flags(&mut self) {
         if self.register_a == 0 {
-            self.status = self.status | 0b0000_0010;
+            self.status.insert(StatusFlags::ZERO);
         } else {
-            self.status = self.status & 0b1111_1101;
+            self.status.remove(StatusFlags::ZERO);
         }
 
         if self.register_a & 0b1000_0000 != 0 {
-            self.status = self.status | 0b1000_0000;
+            self.status.insert(StatusFlags::NEGATIVE);
         } else {
-            self.status = self.status & 0b0111_1111;
+            self.status.remove(StatusFlags::NEGATIVE);
         }
     }
 
@@ -245,8 +287,8 @@ mod test {
         let mut cpu = CPU::new();
         cpu.load_and_run(vec![0xA9, 0x05, 0x00]);
         assert_eq!(cpu.register_a, 0x05);
-        assert!(cpu.status & 0b0000_0010 == 0);
-        assert!(cpu.status & 0b1000_0000 == 0);
+        assert!(!cpu.status.contains(StatusFlags::ZERO));
+        assert!(!cpu.status.contains(StatusFlags::NEGATIVE));
     }
 
     #[test]
@@ -291,14 +333,14 @@ mod test {
     fn test_0xa9_lda_zero_flag() {
         let mut cpu = CPU::new();
         cpu.load_and_run(vec![0xA9, 0x00, 0x00]);
-        assert!(cpu.status & 0b10 == 0b10);
+        assert!(cpu.status.contains(StatusFlags::ZERO));
     }
 
     #[test]
     fn test_0xa9_lda_negative_flag() {
         let mut cpu = CPU::new();
         cpu.load_and_run(vec![0xA9, 0xFF, 0x00]);
-        assert!(cpu.status & 0b1000_0000 == 0b1000_0000);
+        assert!(cpu.status.contains(StatusFlags::NEGATIVE));
     }
 
     #[test]
@@ -312,14 +354,14 @@ mod test {
     fn test_0xaa_tax_zero_flag() {
         let mut cpu = CPU::new();
         cpu.load_and_run(vec![0xA9, 0x00, 0xAA, 0x00]);
-        assert!(cpu.status & 0b10 == 0b10);
+        assert!(cpu.status.contains(StatusFlags::ZERO));
     }
 
     #[test]
     fn test_0xaa_tax_negative_flag() {
         let mut cpu = CPU::new();
         cpu.load_and_run(vec![0xA9, 0xFF, 0xAA, 0x00]);
-        assert!(cpu.status & 0b1000_0000 == 0b1000_0000);
+        assert!(cpu.status.contains(StatusFlags::NEGATIVE));
     }
 
     #[test]
