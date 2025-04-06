@@ -173,14 +173,21 @@ impl CPU {
     fn adc(&mut self, mode: &AddressingMode) {
         let addr = self.get_operand_address(mode);
         let value = self.mem_read(addr) as u16;
-        // Add the carry flag 
-        let result = self.register_a as u16 + value;
+
+        let result = self.register_a as u16 + value + (if self.status.contains(StatusFlags::CARRY) { 1 } else { 0 });
 
         if result > 0xFF {
             self.set_carry_flag();
         } else {
             self.unset_carry_flag();
         }
+
+        // Set overflow flag if bit 8 is a different sign than the result of the addition
+        // i.e if we add 64 + 64 then bit 8 will be set which indicated a negative number in 8-bit systems
+
+        // So, set overflow flag if the 8th bit is carried in to but not out of. OR when the MSB is not set
+        // but the carry flag is set
+
 
         self.register_a = result as u8;
 
