@@ -176,32 +176,27 @@ impl CPU {
 
         let result = self.register_a as u16 + value + (if self.status.contains(StatusFlags::CARRY) { 1 } else { 0 });
 
+        // TODO: add wrapping
+
         if result > 0xFF {
-            self.set_carry_flag();
+            self.status.insert(StatusFlags::CARRY);
         } else {
-            self.unset_carry_flag();
+            self.status.remove(StatusFlags::CARRY);
         }
 
-        // Set overflow flag if bit 8 is a different sign than the result of the addition
-        // i.e if we add 64 + 64 then bit 8 will be set which indicated a negative number in 8-bit systems
-
-        // So, set overflow flag if the 8th bit is carried in to but not out of. OR when the MSB is not set
-        // but the carry flag is set
-
+        if result & 0b1000_0000 == 0b1000_0000 && !self.status.contains(StatusFlags::CARRY) {
+            self.status.insert(StatusFlags::OVERFLOW);
+        } else if result & 0b1000_0000 == 0b0000_0000 && self.status.contains(StatusFlags::CARRY) { 
+            self.status.insert(StatusFlags::OVERFLOW);
+        } else {
+            self.status.remove(StatusFlags::OVERFLOW);
+        }
 
         self.register_a = result as u8;
 
         self.update_zero_and_negative_flags();
     }
 
-    pub fn set_carry_flag(&mut self) {
-        self.status.insert(StatusFlags::CARRY);
-    }
-
-    pub fn unset_carry_flag(&mut self) {
-        self.status.remove(StatusFlags::CARRY);
-    }
-    
     pub fn update_zero_and_negative_flags(&mut self) {
         if self.register_a == 0 {
             self.status.insert(StatusFlags::ZERO);
@@ -288,6 +283,21 @@ impl CPU {
 #[cfg(test)]
 mod test {
     use super::*;
+
+    #[test]
+    fn test_0x69_adc_immediate() {
+        let mut cpu = CPU::new();
+        cpu.load_and_run(vec![0xA9, 0x05, 0x69, 0x05, 0x00]);
+        assert_eq!(cpu.register_a, 0x0A);
+    }
+
+    #[test]
+    fn test_0x69_adc_carry_flag() {
+        let mut cpu = CPU::new();
+        cpu.load_and_run(vec![0xA9, 0xFF, 0x69, 0x01, 0x00]);
+        assert_eq!(cpu.register_a, 0x02);
+        assert!(cpu.status.contains(StatusFlags::CARRY));
+    }
 
     #[test]
     fn test_0xa9_lda_immediate_load_data() {
