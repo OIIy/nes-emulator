@@ -172,27 +172,25 @@ impl CPU {
 
     fn adc(&mut self, mode: &AddressingMode) {
         let addr = self.get_operand_address(mode);
-        let value = self.mem_read(addr) as u16;
+        let value = self.mem_read(addr);
 
-        let result = self.register_a as u16 + value + (if self.status.contains(StatusFlags::CARRY) { 1 } else { 0 });
+        let sum = self.register_a as u16 + value as u16 + (if self.status.contains(StatusFlags::CARRY) { 1 } else { 0 });
 
-        // TODO: add wrapping
-
-        if result > 0xFF {
+        if sum > 0xFF {
             self.status.insert(StatusFlags::CARRY);
         } else {
             self.status.remove(StatusFlags::CARRY);
         }
 
-        if result & 0b1000_0000 == 0b1000_0000 && !self.status.contains(StatusFlags::CARRY) {
-            self.status.insert(StatusFlags::OVERFLOW);
-        } else if result & 0b1000_0000 == 0b0000_0000 && self.status.contains(StatusFlags::CARRY) { 
+        let result = sum as u8;
+
+        if (result ^ value) & (result ^ self.register_a) & 0b1000_0000 != 0 {
             self.status.insert(StatusFlags::OVERFLOW);
         } else {
             self.status.remove(StatusFlags::OVERFLOW);
         }
 
-        self.register_a = result as u8;
+        self.register_a = result;
 
         self.update_zero_and_negative_flags();
     }
@@ -294,9 +292,17 @@ mod test {
     #[test]
     fn test_0x69_adc_carry_flag() {
         let mut cpu = CPU::new();
-        cpu.load_and_run(vec![0xA9, 0xFF, 0x69, 0x01, 0x00]);
-        assert_eq!(cpu.register_a, 0x02);
+        cpu.load_and_run(vec![0xA9, 0xFF, 0x69, 0x02, 0x00]);
+        assert_eq!(cpu.register_a, 0x01);
         assert!(cpu.status.contains(StatusFlags::CARRY));
+    }
+
+    #[test]
+    fn test_0x69_adc_overflow_flag() {
+        let mut cpu = CPU::new();
+        cpu.load_and_run(vec![0xA9, 0x50, 0x69, 0x50, 0x00]);
+        assert_eq!(cpu.register_a, 160);
+        assert!(cpu.status.contains(StatusFlags::OVERFLOW));
     }
 
     #[test]
